@@ -43,10 +43,12 @@ async def hybrid_search(
     if not tsquery_str:
         return []
 
-    # Hybrid search: two independent paths fused in scoring
-    #   Vector path (semantic):  d.embedding <=> :query_embedding  → cosine similarity
-    #   FTS path (keyword):      to_tsvector(chunk_text) @@ to_tsquery  → term matching
-    # WHERE matches if EITHER path succeeds. ORDER BY fuses both with weighted sum.
+    # ── Layer 1: Bi-encoder (semantic, whole corpus) ──
+    #   d.embedding <=> :query_embedding  → cosine similarity (SentenceTransformer)
+    # ── Layer 2: FTS (exact keyword, whole corpus) ──
+    #   to_tsvector(chunk_text) @@ to_tsquery  → term matching (PostgreSQL built-in)
+    # Fused score: vector * 0.7 + keyword * 0.3
+    # Layer 3 (cross-encoder reranker) runs after this, on top ~10 candidates only.
     sql = text(
         """
         SELECT

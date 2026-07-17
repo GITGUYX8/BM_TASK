@@ -15,9 +15,12 @@ Return only the rewritten query, no explanation.
 """
 
 
+from collections.abc import Callable
+
+
 async def rewrite_query(
     description: str,
-    llm_call: callable | None = None,
+    llm_call: Callable | None = None,
 ) -> str:
     if llm_call is None:
         return description
