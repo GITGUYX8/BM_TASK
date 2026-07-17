@@ -43,11 +43,10 @@ async def hybrid_search(
     if not tsquery_str:
         return []
 
-    # Raw SQL for hybrid search:
-    #   vector_score: cosine distance converted to similarity (1 - distance)
-    #   keyword_score: PostgreSQL ts_rank using tf-idf-like scoring
-    #   fused_score: weighted combination (default 70% vector, 30% keyword)
-    # WHERE clause catches chunks matching EITHER vector similarity OR keywords
+    # Hybrid search: two independent paths fused in scoring
+    #   Vector path (semantic):  d.embedding <=> :query_embedding  → cosine similarity
+    #   FTS path (keyword):      to_tsvector(chunk_text) @@ to_tsquery  → term matching
+    # WHERE matches if EITHER path succeeds. ORDER BY fuses both with weighted sum.
     sql = text(
         """
         SELECT
