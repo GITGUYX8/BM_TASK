@@ -5,6 +5,7 @@ from app.rag.chunker import chunk_document
 from app.rag.embedding import EmbeddingService
 from app.db.models import DocumentChunk
 
+# Calls chunker → calls embedder → saves to DB
 _embedder = None
 
 def _get_embedder() -> EmbeddingService:
