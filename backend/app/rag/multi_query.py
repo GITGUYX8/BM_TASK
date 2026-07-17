@@ -1,5 +1,5 @@
 import json
-import re
+from collections.abc import Callable
 
 MULTI_QUERY_SYSTEM_PROMPT = """You are a search query expansion assistant. Given a search query, generate 2 alternative phrasings that capture the same intent but use different terms. This improves the chance of finding relevant documents.
 
@@ -11,7 +11,7 @@ Return only the JSON array, no other text."""
 
 async def expand_queries(
     query: str,
-    llm_call: callable | None = None,
+    llm_call: Callable | None = None,
     max_variants: int = 2,
 ) -> list[str]:
     if llm_call is None or not query.strip():
