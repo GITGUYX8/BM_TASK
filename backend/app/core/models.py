@@ -106,6 +106,7 @@ class AgentState(BaseModel):
     rework_count: int = 0
     status: Literal["processing", "completed", "failed", "escalated"] = "processing"
     error: str | None = None
+    routing_key: str = "orchestrate"
 
 
 class OrderCreate(BaseModel):
