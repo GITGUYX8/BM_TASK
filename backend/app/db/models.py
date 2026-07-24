@@ -75,7 +75,7 @@ class AgentTrace(Base):
 
     __table_args__ = (
         Index("idx_agent_traces_order_id", "order_id"),
-        Index("idx_agent_traces_order_step", "order_id", "step_number", unique=True),
+        Index("idx_agent_traces_order_step", "order_id", "step_number"),
     )
 
 
