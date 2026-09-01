@@ -1,5 +1,6 @@
 from decimal import Decimal
 from app.config import settings
+from app.cache.redis import LLMCache
 
 MODEL_TIERS = {
     "cheap": {
@@ -31,6 +32,8 @@ MODEL_PRICING = {
 class ModelRouter:
     def __init__(self, provider: str | None = None):
         self.provider = provider or settings.llm_provider
+        self.cache = LLMCache()
+        self.last_cache_hit: bool = False
 
     def select(self, tier: str) -> str:
         return MODEL_TIERS[tier][self.provider]
@@ -47,17 +50,36 @@ class ModelRouter:
             return None
 
         model = self.select(tier)
+        combined = system_prompt + "||" + user_message
+
+        try:
+            cached = await self.cache.get(model, combined, 0.0)
+            if cached and "text" in cached:
+                self.last_cache_hit = True
+                return cached["text"]
+        except Exception:
+            pass
+
+        self.last_cache_hit = False
 
         if self.provider == "gemini":
-            return await self._call_gemini(model, system_prompt, user_message)
+            text = await self._call_gemini(model, system_prompt, user_message)
         elif self.provider == "openai":
-            return await self._call_openai(model, system_prompt, user_message)
+            text = await self._call_openai(model, system_prompt, user_message)
         elif self.provider == "anthropic":
-            return await self._call_anthropic(model, system_prompt, user_message)
+            text = await self._call_anthropic(model, system_prompt, user_message)
         elif self.provider == "groq":
-            return await self._call_groq(model, system_prompt, user_message)
+            text = await self._call_groq(model, system_prompt, user_message)
         else:
             return None
+
+        if text:
+            try:
+                await self.cache.set(model, combined, 0.0, {"text": text})
+            except Exception:
+                pass
+
+        return text
 
     async def _call_gemini(self, model: str, system_prompt: str, user_message: str) -> str | None:
         import httpx
