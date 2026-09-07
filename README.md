@@ -10,22 +10,59 @@ POST /orders → Celery chain → Orchestrator → RAG Retriever → Worker → 
                                     └──────────── rework/fail loop ────────────┘
 ```
 
+### System Overview
+
+```mermaid
+flowchart TB
+    User([User / Client]) --> FE["Frontend<br/>Next.js App Router :3000"]
+
+    FE -- "POST /api/orders<br/>GET /api/orders, /api/orders/:id" --> API["Backend API<br/>FastAPI :8000"]
+    FE -- "GET /api/orders/:id/stream<br/>SSE live trace" --> API
+    FE -- "POST /api/documents<br/>RAG ingest" --> API
+
+    API -- "insert order status=queued" --> PG[("PostgreSQL + pgvector :5432<br/>orders, agent_traces,<br/>documents")]
+    API -- "process_order.delay order_id<br/>broker + backend" --> Redis[("Redis :6379<br/>broker, LLM cache,<br/>trace pub/sub")]
+    API -- "publish / subscribe<br/>order:{id}:traces" --> Redis
+
+    Redis --> Worker["Celery Worker x2<br/>process_order task"]
+    Worker --> Graph{"AgentGraph<br/>max_steps=8"}
+
+    Graph --> Orch["Orchestrator<br/>rule-based, cheap"]
+    Graph --> Ret["RAG Retriever<br/>cheap"]
+    Graph --> WRK["Worker<br/>capable tier"]
+    Graph --> Ver["Verifier<br/>cheap tier"]
+
+    Ret -- "hybrid search<br/>vector + FTS" --> PG
+    WRK -- "llm_call" --> Router["ModelRouter<br/>cheap vs capable"]
+    Ver -- "llm_call" --> Router
+    Router -- "GET / SETEX 1h<br/>llm:{model}:{hash}" --> Redis
+    Router -- "HTTP" --> LLM[["LLM Providers<br/>Gemini / OpenAI /<br/>Anthropic / Groq"]]
+
+    Worker -- "persist status, cost,<br/>traces" --> PG
+    Worker -- "TracePublisher.publish<br/>per agent step" --> Redis
+    Redis -- "SSE events<br/>data: trace_json" --> API
 ```
-                                  ┌─────────────┐
-                                  │   Frontend   │  Next.js (App Router)
-                                  │  localhost   │
-                                  └──────┬──────┘
-                                         │ HTTP / SSE
-                                  ┌──────┴──────┐
-                                  │   FastAPI    │  Backend API
-                                  └──────┬──────┘
-                                         │
-                    ┌────────────────────┼────────────────────┐
-                    │                    │                    │
-              ┌─────┴─────┐      ┌──────┴──────┐      ┌─────┴─────┐
-              │ PostgreSQL │      │    Redis    │      │  Celery   │
-              │ + pgvector │      │  cache/rate │      │  workers  │
-              └────────────┘      └─────────────┘      └───────────┘
+
+### Multi-Agent Execution Loop
+
+```mermaid
+flowchart LR
+    Submit["POST /api/orders<br/>Order queued"] --> Task["Celery: process_order<br/>status=processing"]
+    Task --> O{"Orchestrator<br/>route on state"}
+
+    O -- "no chunks → retrieve" --> R["Retriever<br/>RAG pipeline top_k=3"]
+    R --> O
+
+    O -- "chunks, no resolution → resolve" --> W["Worker<br/>LLM + RAG context"]
+    W --> O
+
+    O -- "resolution, no verdict → verify" --> V["Verifier<br/>pass / fail / rework"]
+    V --> O
+
+    O -- "verdict=pass → complete" --> Done(["Persist completed<br/>SSE event: done"])
+    O -- "error → escalate<br/>retries exhausted → fail" --> Done
+
+    V -- "rework / fail loop<br/>max_retries=2" --> O
 ```
 
 ### Multi-Agent Pipeline
