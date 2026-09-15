@@ -58,11 +58,16 @@ GET /api/metrics (root /metrics)               → Prometheus text: orders by st
 
 GET /api/orders/:id                            → order + full trace (DB)
 GET /api/orders/:id/stream (SSE)               → Redis SUB order:{id}:traces
-  event: step     — one AgentTraceEntry JSON per agent step
+  event: step     — one AgentTraceEntry JSON per agent step (forwarded verbatim)
   event: complete — { order_id, status } on completed
   event: error    — { order_id, status } on failed/escalated
   event: done     — legacy alias for `complete` (kept for old clients)
-  If the order is already terminal on connect, completion is emitted immediately.
+  Termination is a fact, not an inference: the Celery task writes
+  `order:{id}:done` (SETEX, 1h TTL) exactly once per terminal run, and the
+  SSE handler reads it on every 1s poll tick. Retries clear the key on
+  requeue so a stale marker can never end the new run's stream early.
+  If the order is already terminal on connect, completion is emitted
+  immediately from the DB status without subscribing.
 GET /api/orders?status=escalated               → human-in-the-loop queue
 POST /api/orders/:id/retry                     → failed/escalated only; clears traces,
                                               resets cost/steps, requeues Celery
@@ -94,7 +99,7 @@ never auto-completes); `max_steps=8` breaks loops; cost ceiling forces cheap tie
 | Backend | FastAPI (async) | JD requirement; native SSE via StreamingResponse |
 | Queue | Celery + Redis broker | Retry semantics (max_retries=2), worker isolation; `asyncio.run` wrapper inside sync task |
 | DB | PostgreSQL 16 + pgvector | Hybrid search: `<=>` cosine + `tsvector`/`tsquery` FTS with weighted fusion (0.7/0.3) |
-| Cache | Redis, SHA256(model,prompt,temp)[:16], TTL 3600s | Idempotent LLM responses; hit/miss logged per trace; failures fall through |
+| Cache | Redis, SHA256(model,prompt,temp)[:16], TTL 3600s | Idempotent LLM responses; hit/miss logged per trace; failures fall through. One client per process (PID-guarded lazy connect — never share a socket across Celery forks); the SSE subscriber keeps a dedicated connection per stream |
 | Embeddings | SentenceTransformers `all-MiniLM-L6-v2` (384-dim) | Free, local, no key |
 | Rerank | cross-encoder `ms-marco-MiniLM-L-6-v2` | Local, lightweight |
 | Chunking | Recursive character splitter, 1000 tokens / 200 overlap | Inside required 500–1500 range |

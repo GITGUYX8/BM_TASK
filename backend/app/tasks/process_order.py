@@ -37,6 +37,9 @@ async def _process_order(order_id_str: str, task):
 
         db_order.status = OrderStatus.processing
         await session.commit()
+        # A previous run may have left a done marker (failed → retry):
+        # clear it so this run's stream cannot end on stale news.
+        await TracePublisher().clear_done(order_id_str)
 
         try:
             graph = AgentGraph(
@@ -79,6 +82,7 @@ async def _process_order(order_id_str: str, task):
                 session.add(db_trace)
 
             await session.commit()
+            await TracePublisher().publish_done(order_id_str, state.status)
             return {"order_id": order_id_str, "status": state.status}
 
         except Exception as exc:
@@ -96,4 +100,5 @@ async def _process_order(order_id_str: str, task):
                         "retries": task.request.retries,
                     }
                 )
+                await TracePublisher().publish_done(order_id_str, "failed")
             raise task.retry(exc=exc)

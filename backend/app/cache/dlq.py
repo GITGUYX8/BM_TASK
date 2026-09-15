@@ -8,8 +8,7 @@ instead of losing them. Reads never raise: Redis outages degrade to empty.
 import json
 from datetime import datetime, timezone
 
-import redis.asyncio as aioredis
-
+from app.cache.redis_client import get_client
 from app.config import settings
 
 DLQ_KEY = "dlq:orders"
@@ -26,31 +25,22 @@ class DeadLetterQueue:
             "failed_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            redis = await aioredis.from_url(self.redis_url, decode_responses=True)
-            try:
-                await redis.rpush(self.key, json.dumps(payload))
-            finally:
-                await redis.aclose()
+            redis = await get_client(self.redis_url)
+            await redis.rpush(self.key, json.dumps(payload))
         except Exception:
             pass  # DLQ is best-effort; never mask the original failure
 
     async def list(self, limit: int = 50) -> list[dict]:
         try:
-            redis = await aioredis.from_url(self.redis_url, decode_responses=True)
-            try:
-                raw = await redis.lrange(self.key, 0, limit - 1)
-                return [json.loads(item) for item in raw]
-            finally:
-                await redis.aclose()
+            redis = await get_client(self.redis_url)
+            raw = await redis.lrange(self.key, 0, limit - 1)
+            return [json.loads(item) for item in raw]
         except Exception:
             return []
 
     async def length(self) -> int:
         try:
-            redis = await aioredis.from_url(self.redis_url, decode_responses=True)
-            try:
-                return int(await redis.llen(self.key) or 0)
-            finally:
-                await redis.aclose()
+            redis = await get_client(self.redis_url)
+            return int(await redis.llen(self.key) or 0)
         except Exception:
             return 0

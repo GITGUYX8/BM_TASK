@@ -20,13 +20,18 @@ the resulting design and `docs/PLAN.md` for the original plan.
 | 13 | Idempotency semantics | Ignore key, key→same order, key+body check | Key lookup; same body → 200 replay, different body → 409 `IDEMPOTENCY_MISMATCH` | Prevents duplicate Celery work on client retries without masking real conflicts |
 | 14 | SSE/insert ordering | Publish-then-persist vs persist-then-publish | Publish per step via `on_trace`, persist at task end | UI streams live before DB commit; terminal `GET` refetch reconciles |
 | 15 | Cost precision | float vs Decimal | `Decimal` everywhere (NUMERIC(8,6)) | Avoids float drift against the `$0.05` ceiling |
+| 16 | Stream termination | String-match trace payloads vs dedicated done-key | `order:{id}:done` (SETEX 1h), read every poll tick; heuristic deleted | Termination is a fact read, not a guess inferred; immune to future agents using new field names; retries clear the key so stale markers can't end new streams; costs ≤1s terminal latency |
+| 17 | Redis client lifetime | Per-publish connection vs shared import-time client vs per-process lazy client | Per-process lazy client with PID guard; dedicated conn per SSE stream | Import-time clients shared across Celery forks corrupt both ends of the socket; per-publish handshakes cost ~5–10ms × traces; PID guard reconnects forked children on first use; subscribed-mode connections can't serve other commands, hence dedicated per stream |
 
 ## Gotchas learned
 
 - `asyncio.run()` inside Celery works on the default prefork pool; it breaks on
   gevent pools (use a dedicated loop there).
-- `TracePublisher` opens/closes Redis per publish — fork-safe for Celery at the
-  cost of ~5–10ms per trace; pool per task if throughput matters.
+- Redis uses one client per process (PID-guarded lazy connect in
+  `cache/redis_client.py`) — fork-safe for Celery without a per-publish
+  handshake. The SSE subscriber still opens one dedicated connection per
+  stream (closed on disconnect) because subscribed-mode connections can't
+  serve other commands.
 - `(order_id, step_number)` must NOT be unique — orchestrator and executor share
   step numbers; index is non-unique (`db/models.py`).
 - `EventSource` cannot send auth headers — SSE stays unauthenticated or moves to

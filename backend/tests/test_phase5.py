@@ -23,6 +23,16 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def _reset_redis_client():
+    # The client is cached per process: reset between tests for isolation.
+    from app.cache import redis_client
+
+    redis_client.reset_client()
+    yield
+    redis_client.reset_client()
+
+
 def _mock_redis(**attrs):
     redis = AsyncMock()
     redis.hgetall.return_value = attrs.get("hgetall", {})
@@ -36,8 +46,8 @@ def _mock_redis(**attrs):
     return redis
 
 
-def _patch_redis(module_path, redis_mock):
-    return patch(f"{module_path}.aioredis.from_url", return_value=redis_mock)
+def _patch_redis(redis_mock):
+    return patch("app.cache.redis_client.aioredis.from_url", return_value=redis_mock)
 
 
 def _request(ip="1.2.3.4"):
@@ -51,7 +61,7 @@ def _request(ip="1.2.3.4"):
 
 def test_rate_limit_allows_first_request():
     redis = _mock_redis(hgetall={})
-    with _patch_redis("app.api.rate_limit", redis):
+    with _patch_redis(redis):
         _run(rate_limit(_request()))
     redis.hset.assert_awaited_once()
     redis.expire.assert_awaited_once()
@@ -59,7 +69,7 @@ def test_rate_limit_allows_first_request():
 
 def test_rate_limit_rejects_empty_bucket():
     redis = _mock_redis(hgetall={"tokens": "0", "updated": str(time.time())})
-    with _patch_redis("app.api.rate_limit", redis):
+    with _patch_redis(redis):
         with pytest.raises(AppError) as exc_info:
             _run(rate_limit(_request()))
     assert exc_info.value.code == "RATE_LIMITED"
@@ -68,14 +78,14 @@ def test_rate_limit_rejects_empty_bucket():
 
 
 def test_rate_limit_fails_open_without_redis():
-    with patch("app.api.rate_limit.aioredis.from_url", side_effect=ConnectionError):
+    with patch("app.cache.redis_client.aioredis.from_url", side_effect=ConnectionError):
         _run(rate_limit(_request()))  # must not raise
 
 
 def test_rate_limit_refills_over_time():
     old = time.time() - 120  # two minutes ago: full refill expected
     redis = _mock_redis(hgetall={"tokens": "0", "updated": str(old)})
-    with _patch_redis("app.api.rate_limit", redis):
+    with _patch_redis(redis):
         _run(rate_limit(_request()))
     redis.hset.assert_awaited_once()
 
@@ -85,7 +95,7 @@ def test_rate_limit_refills_over_time():
 
 def test_dlq_push_includes_order_and_timestamp():
     redis = _mock_redis()
-    with _patch_redis("app.cache.dlq", redis):
+    with _patch_redis(redis):
         _run(
             DeadLetterQueue().push(
                 {"order_id": "abc", "title": "T", "error": "boom", "retries": 2}
@@ -101,7 +111,7 @@ def test_dlq_push_includes_order_and_timestamp():
 
 
 def test_dlq_degrades_gracefully():
-    with patch("app.cache.dlq.aioredis.from_url", side_effect=ConnectionError):
+    with patch("app.cache.redis_client.aioredis.from_url", side_effect=ConnectionError):
         _run(DeadLetterQueue().push({"order_id": "x"}))  # must not raise
         assert _run(DeadLetterQueue().length()) == 0
         assert _run(DeadLetterQueue().list()) == []
@@ -122,7 +132,7 @@ def test_metrics_exposition_format():
 
     redis = _mock_redis(get={"stats:cache_hits": "10", "stats:cache_misses": "3"},
                         llen={"celery": 4, "dlq:orders": 1})
-    with _patch_redis("app.api.metrics", redis):
+    with _patch_redis(redis):
         body = _run(metrics(session))
 
     assert 'workorders_by_status{status="completed"} 2' in body
@@ -138,7 +148,7 @@ def test_metrics_exposition_format():
 def test_metrics_degrades_without_backends():
     session = AsyncMock()
     session.execute.side_effect = RuntimeError("db down")
-    with patch("app.api.metrics.aioredis.from_url", side_effect=ConnectionError):
+    with patch("app.cache.redis_client.aioredis.from_url", side_effect=ConnectionError):
         body = _run(metrics(session))
     assert "workorder_traces_total 0" in body
     assert "celery_queue_length 0" in body

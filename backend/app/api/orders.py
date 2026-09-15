@@ -11,7 +11,8 @@ from app.db.models import Order as OrderDB, AgentTrace as AgentTraceDB
 from app.db.models import OrderStatus
 from app.core.models import OrderCreate, OrderResponse, AgentTraceEntry
 from app.tasks.process_order import process_order
-from app.cache.events import TraceSubscriber
+from app.cache.events import TracePublisher, TraceSubscriber, done_key
+from app.cache.redis_client import get_client
 from app.api.errors import AppError, ERROR_CATALOG
 from app.api.rate_limit import rate_limit
 
@@ -127,30 +128,34 @@ async def stream_order(order_id: uuid.UUID, session: AsyncSession = Depends(get_
 
         subscriber = TraceSubscriber()
         pubsub, redis = await subscriber.subscribe(str(order_id))
+        try:
+            done_redis = await get_client()
+        except Exception:
+            done_redis = None
         terminal_status = "done"
 
         try:
             while True:
                 msg = await pubsub.get_message(timeout=1.0)
                 if msg and msg["type"] == "message":
-                    raw = msg["data"]
-                    yield f"event: step\ndata: {raw}\n\n"
+                    yield f"event: step\ndata: {msg['data']}\n\n"
+                # Termination is a fact, not an inference: the Celery task
+                # writes order:{id}:done exactly once per terminal run.
+                if done_redis is not None:
                     try:
-                        trace = json.loads(raw)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    action = (trace.get("output_json") or {}).get("action")
-                    trace_status = trace.get("status")
-                    if action in ("complete", "fail", "escalate") or trace_status in (
-                        "failed",
-                        "escalated",
-                    ):
-                        if action == "fail" or trace_status == "failed":
-                            terminal_status = "failed"
-                        elif action == "escalate" or trace_status == "escalated":
-                            terminal_status = "escalated"
-                        else:
-                            terminal_status = "completed"
+                        done_raw = await done_redis.get(done_key(str(order_id)))
+                    except Exception:
+                        done_raw = None
+                    if done_raw:
+                        try:
+                            final = json.loads(done_raw).get("status", "completed")
+                        except (json.JSONDecodeError, TypeError, AttributeError):
+                            final = "completed"
+                        terminal_status = (
+                            final
+                            if final in ("completed", "failed", "escalated")
+                            else "completed"
+                        )
                         break
         finally:
             await pubsub.unsubscribe()
@@ -184,6 +189,9 @@ async def retry_order(order_id: uuid.UUID, session: AsyncSession = Depends(get_s
     db_order.step_count = 0
     db_order.error_trace = None
     await session.commit()
+    # Clear any done marker from the failed run so the new run's stream
+    # cannot terminate on stale news (the task clears it again on start).
+    await TracePublisher().clear_done(str(order_id))
 
     process_order.delay(str(order_id))
     return _order_to_response(db_order, [])

@@ -9,10 +9,10 @@ traffic because the limiter is down.
 
 import time
 
-import redis.asyncio as aioredis
 from fastapi import Request
 
 from app.api.errors import AppError, ERROR_CATALOG
+from app.cache.redis_client import get_client
 from app.config import settings
 
 KEY_PREFIX = "ratelimit:"
@@ -28,26 +28,23 @@ async def rate_limit(
     client_ip = request.client.host if request.client else "unknown"
     key = KEY_PREFIX + client_ip
     try:
-        redis = await aioredis.from_url(redis_url, decode_responses=True)
-        try:
-            now = time.time()
-            data = await redis.hgetall(key)
-            tokens = float(data.get("tokens", capacity))
-            updated = float(data.get("updated", now))
-            tokens = min(capacity, tokens + (now - updated) * REFILL_PER_SECOND)
-            if tokens < 1:
-                retry_after = max(1, int((1 - tokens) / REFILL_PER_SECOND))
-                status_code, message = ERROR_CATALOG["RATE_LIMITED"]
-                raise AppError(
-                    code="RATE_LIMITED",
-                    message=message,
-                    details={"retry_after_seconds": retry_after},
-                    status_code=status_code,
-                )
-            await redis.hset(key, mapping={"tokens": tokens - 1, "updated": now})
-            await redis.expire(key, 120)
-        finally:
-            await redis.aclose()
+        redis = await get_client(redis_url)
+        now = time.time()
+        data = await redis.hgetall(key)
+        tokens = float(data.get("tokens", capacity))
+        updated = float(data.get("updated", now))
+        tokens = min(capacity, tokens + (now - updated) * REFILL_PER_SECOND)
+        if tokens < 1:
+            retry_after = max(1, int((1 - tokens) / REFILL_PER_SECOND))
+            status_code, message = ERROR_CATALOG["RATE_LIMITED"]
+            raise AppError(
+                code="RATE_LIMITED",
+                message=message,
+                details={"retry_after_seconds": retry_after},
+                status_code=status_code,
+            )
+        await redis.hset(key, mapping={"tokens": tokens - 1, "updated": now})
+        await redis.expire(key, 120)
     except AppError:
         raise
     except Exception:

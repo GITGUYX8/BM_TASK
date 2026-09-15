@@ -18,9 +18,8 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import redis.asyncio as aioredis
-
 from app.cache.dlq import DLQ_KEY
+from app.cache.redis_client import get_client
 from app.config import settings
 from app.db.models import AgentTrace as AgentTraceDB
 from app.db.models import Order as OrderDB
@@ -68,14 +67,11 @@ async def metrics(session: AsyncSession = Depends(get_session)):
 
     cache_hits = cache_misses = celery_depth = dlq_depth = 0
     try:
-        redis = await aioredis.from_url(settings.redis_url, decode_responses=True)
-        try:
-            cache_hits = await _redis_int(redis, CACHE_HITS_KEY)
-            cache_misses = await _redis_int(redis, CACHE_MISSES_KEY)
-            celery_depth = await _redis_int(redis, CELERY_QUEUE_KEY, use_llen=True)
-            dlq_depth = await _redis_int(redis, DLQ_KEY, use_llen=True)
-        finally:
-            await redis.aclose()
+        redis = await get_client(settings.redis_url)
+        cache_hits = await _redis_int(redis, CACHE_HITS_KEY)
+        cache_misses = await _redis_int(redis, CACHE_MISSES_KEY)
+        celery_depth = await _redis_int(redis, CELERY_QUEUE_KEY, use_llen=True)
+        dlq_depth = await _redis_int(redis, DLQ_KEY, use_llen=True)
     except Exception:
         pass
 
