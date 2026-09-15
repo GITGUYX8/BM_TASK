@@ -33,7 +33,7 @@ and streamed over SSE → timeline UI.
 ## Data flow
 
 ```
-POST /orders (+ Idempotency-Key)
+POST /api/orders (+ Idempotency-Key, token-bucket rate limit 30/min per IP → 429 RATE_LIMITED)
   → insert orders row (status=queued)
   → process_order.delay(order_id)          [Celery, Redis broker]
   → 201 { order_id } on create, 200 on idempotent replay
@@ -49,7 +49,12 @@ Celery worker: _process_order
        verify   → VerifierNode (cheap tier) → Verdict(pass|fail|rework)
        each step → on_trace → Redis PUBLISH order:{id}:traces + cost_tracker.add_cost
   → persist agent_traces rows, final status/cost/steps
-  → retry ×2 on exception, else status=failed + error_trace
+  → retry ×2 on exception, else status=failed + error_trace + DLQ push (`dlq:orders`)
+
+GET /api/orders?status=&limit=&offset=          → paginated list (default 50, max 100)
+GET /api/metrics (root /metrics)               → Prometheus text: orders by status,
+                                             traces total, cost total, cache
+                                             hits/misses, celery depth, dlq depth
 
 GET /api/orders/:id                            → order + full trace (DB)
 GET /api/orders/:id/stream (SSE)               → Redis SUB order:{id}:traces

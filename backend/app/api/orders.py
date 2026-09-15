@@ -1,7 +1,7 @@
 import json
 import uuid
 from decimal import Decimal
-from fastapi import APIRouter, Depends, Header, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, select
@@ -13,6 +13,7 @@ from app.core.models import OrderCreate, OrderResponse, AgentTraceEntry
 from app.tasks.process_order import process_order
 from app.cache.events import TraceSubscriber
 from app.api.errors import AppError, ERROR_CATALOG
+from app.api.rate_limit import rate_limit
 
 router = APIRouter()
 
@@ -28,6 +29,7 @@ async def create_order(
     response: Response,
     session: AsyncSession = Depends(get_session),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    _rate_limited: None = Depends(rate_limit),
 ):
     if idempotency_key:
         existing_result = await session.execute(
@@ -72,10 +74,18 @@ async def create_order(
 async def list_orders(
     session: AsyncSession = Depends(get_session),
     status: OrderStatus | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
 ):
-    query = select(OrderDB).order_by(OrderDB.created_at.desc()).limit(50)
+    query = select(OrderDB).order_by(OrderDB.created_at.desc()).limit(limit).offset(offset)
     if status is not None:
-        query = select(OrderDB).where(OrderDB.status == status).order_by(OrderDB.created_at.desc()).limit(50)
+        query = (
+            select(OrderDB)
+            .where(OrderDB.status == status)
+            .order_by(OrderDB.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
     result = await session.execute(query)
     orders = result.scalars().all()
     return [_order_to_response(o) for o in orders]

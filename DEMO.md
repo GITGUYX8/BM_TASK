@@ -90,5 +90,29 @@ degradation by design.
 ```bash
 docker compose exec backend pytest -v
 # test_agents.py (14) + test_rag.py + test_integration.py (idempotency,
-# structured errors, retry, full graph trace) — no LLM key required.
+# structured errors, retry, full graph trace) + test_phase5.py (metrics,
+# rate limiting, DLQ, pagination) — no LLM key required.
 ```
+
+## 7. Observability quick tour (Phase 6)
+
+```bash
+# Prometheus metrics: orders by status, traces, spend, cache hits/misses,
+# Celery queue depth, dead-letter queue depth
+curl http://localhost:8000/metrics
+
+# Paginated order list (default 50, max 100)
+curl "http://localhost:8000/api/orders?limit=10&offset=0"
+
+# Rate limiting: 30 submissions/min per IP; over that →
+# 429 { "error": { "code": "RATE_LIMITED", ... "retry_after_seconds": N } }
+for i in $(seq 1 35); do
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:8000/api/orders \
+    -H "Content-Type: application/json" \
+    -d '{"title": "flood", "description": "rate limit probe", "priority": "low"}'
+done
+```
+
+Orders whose Celery task exhausts all retries land on the `dlq:orders` Redis
+list (`GET /metrics` shows `dlq_length`) with order id, title, error, and
+retry count — review them instead of losing them silently.

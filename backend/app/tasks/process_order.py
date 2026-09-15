@@ -10,6 +10,7 @@ from app.db.models import OrderStatus
 from app.core.models import AgentState, OrchestratorInput, AgentTraceEntry
 from app.agents.graph import AgentGraph
 from app.core.model_router import ModelRouter
+from app.cache.dlq import DeadLetterQueue
 from app.cache.events import TracePublisher
 
 
@@ -84,4 +85,15 @@ async def _process_order(order_id_str: str, task):
             db_order.status = OrderStatus.failed
             db_order.error_trace = {"error": str(exc)}
             await session.commit()
+            if task.request.retries >= task.max_retries:
+                # Retries exhausted: park the order on the dead-letter queue
+                # for operator review instead of losing it silently.
+                await DeadLetterQueue().push(
+                    {
+                        "order_id": order_id_str,
+                        "title": db_order.title,
+                        "error": str(exc),
+                        "retries": task.request.retries,
+                    }
+                )
             raise task.retry(exc=exc)
