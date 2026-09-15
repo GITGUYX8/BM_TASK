@@ -5,7 +5,7 @@
 ```bash
 cp .env.example .env        # set LLM_PROVIDER + LLM_API_KEY (optional; offline fallbacks work)
 docker compose up --build
-docker compose exec backend python -m app.rag.seed_data
+docker compose exec backend python -m scripts.seed_documents --count 12
 ```
 
 Frontend: http://localhost:3000 · API docs: http://localhost:8000/docs
@@ -13,7 +13,7 @@ Frontend: http://localhost:3000 · API docs: http://localhost:8000/docs
 ## 1. Submit a work order
 
 ```bash
-curl -X POST http://localhost:8000/orders \
+curl -X POST http://localhost:8000/api/orders \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: demo-001" \
   -d '{"title": "Network outage in sector 7G",
@@ -31,7 +31,7 @@ Or use the web UI at `/` (title + description + priority → Submit).
 ## 2. Watch the agent trace stream in real time
 
 ```bash
-curl -N http://localhost:8000/orders/<order_id>/stream
+curl -N http://localhost:8000/api/orders/<order_id>/stream
 # event: step
 # data: {"agent_name":"orchestrator","step_number":1,...}
 # event: step
@@ -55,7 +55,7 @@ Expand the `retriever` step → "Show source chunks (3)": each chunk lists
 snippet. Compare with the raw endpoint:
 
 ```bash
-curl http://localhost:8000/orders/<order_id> | python -m json.tool
+curl http://localhost:8000/api/orders/<order_id> | python -m json.tool
 # traces[].output_json.chunks[] → document_title, fused_score, vector_score, keyword_score
 ```
 
@@ -65,13 +65,13 @@ Failed/escalated orders surface inline: red `error_trace` block on the detail
 page plus `event: error` on the stream. List the human-review queue:
 
 ```bash
-curl "http://localhost:8000/orders?status=escalated"
+curl "http://localhost:8000/api/orders?status=escalated"
 ```
 
 Re-process from scratch (clears traces, resets cost/steps, requeues Celery):
 
 ```bash
-curl -X POST http://localhost:8000/orders/<order_id>/retry
+curl -X POST http://localhost:8000/api/orders/<order_id>/retry
 # → 202 with status "queued"; only failed/escalated orders accepted,
 #   otherwise 409 { "error": { "code": "ORDER_PROCESSING", ... } }
 ```

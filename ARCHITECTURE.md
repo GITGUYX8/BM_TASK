@@ -14,9 +14,10 @@ and streamed over SSE → timeline UI.
                     └──────┬──────┘
                            │ HTTP / SSE (EventSource)
                     ┌──────┴──────┐
-                    │   FastAPI    │  POST /orders, GET /orders/:id,
-                    │  backend:8000│  GET /orders/:id/stream, POST /documents,
-                    └──────┬──────┘  POST /orders/:id/retry
+                    │   FastAPI    │  (all routes under /api prefix)
+                    │  backend:8000│  POST /api/orders, GET /api/orders/:id,
+                    └──────┬──────┘  GET /api/orders/:id/stream, POST /api/documents,
+                           │         POST /api/orders/:id/retry
                            │
         ┌──────────────────┼──────────────────┐
         │                  │                  │
@@ -35,7 +36,7 @@ and streamed over SSE → timeline UI.
 POST /orders (+ Idempotency-Key)
   → insert orders row (status=queued)
   → process_order.delay(order_id)          [Celery, Redis broker]
-  → 202/201 { order_id }
+  → 201 { order_id } on create, 200 on idempotent replay
 
 Celery worker: _process_order
   → status=processing
@@ -50,17 +51,17 @@ Celery worker: _process_order
   → persist agent_traces rows, final status/cost/steps
   → retry ×2 on exception, else status=failed + error_trace
 
-GET /orders/:id                            → order + full trace (DB)
-GET /orders/:id/stream (SSE)               → Redis SUB order:{id}:traces
+GET /api/orders/:id                            → order + full trace (DB)
+GET /api/orders/:id/stream (SSE)               → Redis SUB order:{id}:traces
   event: step     — one AgentTraceEntry JSON per agent step
   event: complete — { order_id, status } on completed
   event: error    — { order_id, status } on failed/escalated
   event: done     — legacy alias for `complete` (kept for old clients)
   If the order is already terminal on connect, completion is emitted immediately.
-GET /orders?status=escalated               → human-in-the-loop queue
-POST /orders/:id/retry                     → failed/escalated only; clears traces,
+GET /api/orders?status=escalated               → human-in-the-loop queue
+POST /api/orders/:id/retry                     → failed/escalated only; clears traces,
                                               resets cost/steps, requeues Celery
-POST /documents                            → chunk → embed → pgvector insert
+POST /api/documents                            → chunk → embed → pgvector insert
 ```
 
 ## Agent contracts (`backend/app/core/models.py`)
