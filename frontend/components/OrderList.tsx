@@ -1,17 +1,23 @@
 "use client";
 
-import { useEffect } from "react";
-import { listOrders } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { listOrders, ApiError } from "@/lib/api";
 import { useOrderStore as useStore } from "@/lib/store";
+import StatusBadge from "./StatusBadge";
 
-export default function OrderList() {
+export default function OrderList({ statusFilter }: { statusFilter?: string }) {
   const orders = useStore((s) => s.orders);
   const setOrders = useStore((s) => s.setOrders);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    listOrders().then(setOrders).catch(console.error);
-  }, [setOrders]);
+    setError("");
+    listOrders(statusFilter).then(setOrders).catch((e) => {
+      setError(e instanceof ApiError ? `${e.code}: ${e.message}` : String(e));
+    });
+  }, [setOrders, statusFilter]);
 
+  if (error) return <p style={{ color: "red" }}>Failed to load orders: {error}</p>;
   if (orders.length === 0) return <p>No orders submitted yet.</p>;
 
   return (
@@ -28,7 +34,7 @@ export default function OrderList() {
             padding: 12,
           }}
         >
-          <strong>{o.title}</strong> — <span style={{ color: "#666" }}>{o.status}</span>
+          <strong>{o.title}</strong> — <StatusBadge status={o.status} />
           <br />
           <small>
             {o.priority} priority | ${Number(o.cumulative_cost).toFixed(4)} | {o.step_count} steps

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { createOrder } from "@/lib/api";
+import { createOrder, ApiError } from "@/lib/api";
 
 export default function OrderForm() {
   const [title, setTitle] = useState("");
@@ -20,7 +20,7 @@ export default function OrderForm() {
       setDescription("");
       setPriority("medium");
     } catch (err) {
-      setError(String(err));
+      setError(err instanceof ApiError ? `${err.code}: ${err.message}` : String(err));
     } finally {
       setLoading(false);
     }
